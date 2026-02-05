@@ -1,0 +1,8 @@
+{
+  "name": "Copy of GyanSetu  Bridge ehehehe",
+  "description": "GyanSetu is a social platform designed to connect senior citizens ('Gurus') with the younger generation ('Shishyas'). It empowers seniors to share and monetize their lifelong experience and knowledge, while enabling youth to gain practical wisdom and mentorship.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
