@@ -1,9 +1,11 @@
 
+
 import React, { useState, Suspense, useEffect, createContext, useContext, useMemo } from 'react';
 import { type ActivePage, type LoggedInUser, type Guru, type Post, type Theme, type BankDetails } from './types';
 import BottomNav from './components/BottomNav';
 import Spinner from './components/Spinner';
 import { APP_OWNER_USERNAME } from './constants';
+import { supabase } from './lib/supabase';
 
 // --- LOCALIZATION SETUP ---
 
@@ -251,6 +253,12 @@ const AppContent: React.FC = () => {
   const [theme] = useState<Theme>(() => (localStorage.getItem('gyansetu-theme') as Theme) || 'system');
 
   useEffect(() => {
+    // Supabase connectivity check
+    // Fix: Access VITE_SUPABASE_URL via process.env
+    if (!process.env.VITE_SUPABASE_URL) {
+      console.warn("Supabase URL missing. Use VITE_SUPABASE_URL in your environment.");
+    }
+
     const saved = localStorage.getItem('gyansetu-session');
     if (saved) {
       try {

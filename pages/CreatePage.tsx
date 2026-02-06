@@ -1,7 +1,7 @@
-
 import React, { useState, useEffect } from 'react';
 import { Guru, Post, PostType } from '../types';
 import { useLocalization } from '../App';
+import { supabase } from '../lib/supabase';
 
 interface CreatePageProps {
   currentUser: Guru;
@@ -14,6 +14,7 @@ const CreatePage: React.FC<CreatePageProps> = ({ currentUser }) => {
   const [content, setContent] = useState(''); // For articles
   const [caption, setCaption] = useState(''); // For media
   const [file, setFile] = useState<File | null>(null);
+  const [isPosting, setIsPosting] = useState(false);
 
   // Reset fields when content type changes
   useEffect(() => {
@@ -29,40 +30,41 @@ const CreatePage: React.FC<CreatePageProps> = ({ currentUser }) => {
     }
   };
 
-  const handlePost = () => {
-    const newPost: Post = {
-      id: `post_${Date.now()}`,
-      guru: currentUser,
-      type: contentType,
-      title: title,
-      content: contentType === PostType.ARTICLE ? content : caption,
-      mediaUrl: file ? `https://picsum.photos/seed/${Math.random()}/600/400` : undefined,
-      likes: 0,
-      comments: 0,
-      timestamp: new Date().toISOString(),
-    };
-
+  const handlePost = async () => {
+    setIsPosting(true);
     try {
-        const postsJson = localStorage.getItem('gyansetu-posts');
-        const posts: Post[] = postsJson ? JSON.parse(postsJson) : [];
-        posts.unshift(newPost); // Add new post to the beginning
-        localStorage.setItem('gyansetu-posts', JSON.stringify(posts));
-        
+        const postData = {
+            creator_id: currentUser.id,
+            type: contentType,
+            title: title,
+            content: contentType === PostType.ARTICLE ? content : caption,
+            media_url: file ? `https://picsum.photos/seed/${Math.random()}/600/400` : null, // In real app, upload file to storage
+        };
+
+        const { error } = await supabase
+            .from('posts')
+            .insert([postData]);
+
+        if (error) throw error;
+
         alert('Your Gyan has been successfully shared!');
         
-        // Reset form state after successful "post"
+        // Reset form state
         setTitle('');
         setContent('');
         setCaption('');
         setFile(null);
 
-    } catch (e) {
+    } catch (e: any) {
         console.error("Failed to save post", e);
-        alert("There was an error sharing your Gyan. Please try again.");
+        alert(`Error sharing your Gyan: ${e.message}`);
+    } finally {
+        setIsPosting(false);
     }
   };
 
   const isButtonDisabled = () => {
+    if (isPosting) return true;
     if (!title.trim()) return true;
     if (contentType === PostType.ARTICLE) {
       return !content.trim();
@@ -162,7 +164,7 @@ const CreatePage: React.FC<CreatePageProps> = ({ currentUser }) => {
             className="bg-deepBlue-700 text-white font-bold py-3 px-8 rounded-lg hover:bg-deepBlue-800 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
             disabled={isButtonDisabled()}
           >
-            {t('createPostButton')}
+            {isPosting ? 'Sharing...' : t('createPostButton')}
           </button>
         </div>
       </div>

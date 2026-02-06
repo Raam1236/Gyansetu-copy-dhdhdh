@@ -2,12 +2,7 @@
 import React, { useState, FC, ChangeEvent, FormEvent, useEffect } from 'react';
 import { LoggedInUser, UserRole, StoredUser } from '../types';
 import { useLocalization } from '../App';
-
-// --- TYPE DEFINITIONS ---
-interface AuthPageProps {
-  onAuthSuccess: (user: LoggedInUser) => void;
-}
-type AuthView = 'login' | 'signupRole' | 'signupDetails' | 'forgot' | 'otp';
+import { supabase } from '../lib/supabase';
 
 // --- SVG ICONS ---
 const UserIcon: FC<{ className?: string }> = ({ className }) => (
@@ -25,18 +20,6 @@ const LockIcon: FC<{ className?: string }> = ({ className }) => (
 const ArrowLeftIcon: FC<{ className?: string }> = ({ className }) => (
     <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
 );
-
-
-// --- UTILITY FUNCTIONS ---
-const getUsersFromStorage = (): StoredUser[] => {
-    try {
-        const usersJson = localStorage.getItem('gyansetu-users');
-        return usersJson ? JSON.parse(usersJson) : [];
-    } catch (e) {
-        console.error("Failed to parse users from localStorage", e);
-        return [];
-    }
-};
 
 const InputField: FC<{ name: string; label?: string; type?: string; value: string; onChange: (e: ChangeEvent<HTMLInputElement>) => void; required?: boolean; placeholder?: string; icon?: React.ReactNode }> = 
     ({ name, label, type = 'text', value, onChange, required = true, placeholder, icon }) => (
@@ -60,59 +43,62 @@ const InputField: FC<{ name: string; label?: string; type?: string; value: strin
     </div>
 );
 
+// Define AuthPageProps interface to fix missing type error on line 45
+interface AuthPageProps {
+  onAuthSuccess: (user: LoggedInUser) => void;
+}
 
-// --- MAIN AUTH PAGE COMPONENT ---
 const AuthPage: FC<AuthPageProps> = ({ onAuthSuccess }) => {
     const { t } = useLocalization();
-    const [view, setView] = useState<AuthView>('login');
+    const [view, setView] = useState<'login' | 'signupRole' | 'signupDetails' | 'forgot' | 'otp'>('login');
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     
-    // Login State
-    const [loginIdentifier, setLoginIdentifier] = useState('');
-    const [loginPassword, setLoginPassword] = useState('');
-    
-    // Signup State
+    // Auth State
+    const [identifier, setIdentifier] = useState(''); // Email
+    const [password, setPassword] = useState('');
     const [signupRole, setSignupRole] = useState<UserRole | null>(null);
     const [signupData, setSignupData] = useState({
         firstName: '', lastName: '', email: '', username: '', mobile: '', password: '', confirmPassword: ''
     });
 
-    // Forgot Password State
-    const [resetIdentifier, setResetIdentifier] = useState('');
-
     useEffect(() => {
         document.body.classList.add('auth-background');
-        return () => {
-            document.body.classList.remove('auth-background');
-        }
+        return () => document.body.classList.remove('auth-background');
     }, []);
 
-    const handleLogin = (e: FormEvent) => {
+    const handleLogin = async (e: FormEvent) => {
         e.preventDefault();
         setError('');
         setIsLoading(true);
 
-        setTimeout(() => {
-            const users = getUsersFromStorage();
-            const lowerIdentifier = loginIdentifier.toLowerCase().trim();
-            const user = users.find(u => 
-                u.email.toLowerCase() === lowerIdentifier || 
-                u.username.toLowerCase() === lowerIdentifier ||
-                u.mobile === lowerIdentifier
-            );
+        const { data, error: authError } = await supabase.auth.signInWithPassword({
+            email: identifier,
+            password: password,
+        });
 
-            if (user && user.password === loginPassword) {
-                localStorage.setItem('gyansetu-session', JSON.stringify(user));
-                onAuthSuccess(user);
-            } else {
-                setError(t('errorInvalidCredentials'));
-            }
+        if (authError) {
+            setError(authError.message);
             setIsLoading(false);
-        }, 1000);
+            return;
+        }
+
+        if (data.user) {
+            // Fetch profile data from 'profiles' table
+            const { data: profile } = await supabase
+                .from('profiles')
+                .select('*')
+                .eq('id', data.user.id)
+                .single();
+
+            const loggedInUser = { ...profile, email: data.user.email } as LoggedInUser;
+            localStorage.setItem('gyansetu-session', JSON.stringify(loggedInUser));
+            onAuthSuccess(loggedInUser);
+        }
+        setIsLoading(false);
     };
 
-    const handleSignup = (e: FormEvent) => {
+    const handleSignup = async (e: FormEvent) => {
         e.preventDefault();
         setError('');
 
@@ -120,73 +106,60 @@ const AuthPage: FC<AuthPageProps> = ({ onAuthSuccess }) => {
             setError(t('errorPasswordsNoMatch'));
             return;
         }
-        if (signupData.password.length < 6) {
-            setError(t('errorPasswordTooShort'));
+
+        setIsLoading(true);
+
+        const { data, error: authError } = await supabase.auth.signUp({
+            email: signupData.email,
+            password: signupData.password,
+            options: {
+                data: {
+                    first_name: signupData.firstName,
+                    last_name: signupData.lastName,
+                    username: signupData.username,
+                    role: signupRole,
+                }
+            }
+        });
+
+        if (authError) {
+            setError(authError.message);
+            setIsLoading(false);
             return;
         }
 
-        setIsLoading(true);
-        setTimeout(() => {
-            const users = getUsersFromStorage();
-            if (users.some(u => u.email.toLowerCase() === signupData.email.toLowerCase().trim())) {
-                setError(t('errorEmailExists'));
-                return setIsLoading(false);
-            }
-            if (users.some(u => u.username.toLowerCase() === signupData.username.toLowerCase().trim())) {
-                setError(t('errorUsernameExists'));
-                return setIsLoading(false);
-            }
-             if (users.some(u => u.mobile.trim() === signupData.mobile.trim())) {
-                setError(t('errorMobileExists'));
-                return setIsLoading(false);
-            }
-            
-            const newUser: StoredUser = {
-                id: `user_${Date.now()}`,
-                role: signupRole!,
-                firstName: signupData.firstName.trim(),
-                lastName: signupData.lastName.trim(),
-                email: signupData.email.trim().toLowerCase(),
-                username: signupData.username.trim().toLowerCase(),
-                mobile: signupData.mobile.trim(),
-                password: signupData.password,
-                profilePictureUrl: `https://picsum.photos/seed/${signupData.username}/200`,
-                ...(signupRole === 'guru' && {
-                    age: 0, expertise: '', bio: '', rating: 0, reviews: 0, upiId: ''
-                })
-            };
+        if (data.user) {
+            // Create record in profiles table
+            const { error: profileError } = await supabase.from('profiles').insert({
+                id: data.user.id,
+                first_name: signupData.firstName,
+                last_name: signupData.lastName,
+                username: signupData.username,
+                role: signupRole,
+                avatar_url: `https://picsum.photos/seed/${signupData.username}/200`
+            });
 
-            users.push(newUser);
-            localStorage.setItem('gyansetu-users', JSON.stringify(users));
+            if (profileError) {
+                setError(profileError.message);
+                setIsLoading(false);
+                return;
+            }
+
+            const newUser = {
+                id: data.user.id,
+                firstName: signupData.firstName,
+                lastName: signupData.lastName,
+                username: signupData.username,
+                role: signupRole!,
+                email: signupData.email,
+                profilePictureUrl: `https://picsum.photos/seed/${signupData.username}/200`
+            } as LoggedInUser;
+
             localStorage.setItem('gyansetu-session', JSON.stringify(newUser));
             onAuthSuccess(newUser);
-
-        }, 1500);
+        }
+        setIsLoading(false);
     };
-
-    const handleForgotPassword = (e: FormEvent) => {
-        e.preventDefault();
-        setIsLoading(true);
-        setTimeout(() => {
-            alert(`Password reset OTP sent to ${resetIdentifier}. (Simulation)`);
-            setIsLoading(false);
-            setView('otp');
-        }, 1000);
-    }
-    
-    const handleResetPassword = (e: FormEvent) => {
-        e.preventDefault();
-        setIsLoading(true);
-        setTimeout(() => {
-            alert(`Password has been successfully reset. Please login with your new password. (Simulation)`);
-            setIsLoading(false);
-            setView('login');
-        }, 1000);
-    }
-
-    const handleSignupChange = (e: ChangeEvent<HTMLInputElement>) => {
-        setSignupData(prev => ({ ...prev, [e.target.name]: e.target.value }));
-    }
 
     const renderLogin = () => (
         <div className="space-y-6">
@@ -195,161 +168,55 @@ const AuthPage: FC<AuthPageProps> = ({ onAuthSuccess }) => {
                 <p className="text-gray-300">{t('authLoginPrompt')}</p>
             </div>
             <form onSubmit={handleLogin} className="space-y-4">
-                <InputField name="identifier" placeholder={t('authIdentifierPlaceholder')} value={loginIdentifier} onChange={e => setLoginIdentifier(e.target.value)} icon={<UserIcon className="h-5 w-5"/>} />
-                <InputField name="password" type="password" placeholder={t('authPasswordPlaceholder')} value={loginPassword} onChange={e => setLoginPassword(e.target.value)} icon={<LockIcon className="h-5 w-5"/>} />
-                
+                <InputField name="email" placeholder={t('authEmailPlaceholder')} type="email" value={identifier} onChange={e => setIdentifier(e.target.value)} icon={<EmailIcon className="h-5 w-5"/>} />
+                <InputField name="password" type="password" placeholder={t('authPasswordPlaceholder')} value={password} onChange={e => setPassword(e.target.value)} icon={<LockIcon className="h-5 w-5"/>} />
                 {error && <p className="text-red-400 text-sm text-center">{error}</p>}
-
-                <button type="submit" disabled={isLoading} className="w-full flex justify-center bg-saffron-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-saffron-700 transition-colors disabled:bg-saffron-800 disabled:cursor-not-allowed">
+                <button type="submit" disabled={isLoading} className="w-full bg-saffron-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-saffron-700 disabled:opacity-50">
                     {isLoading ? t('authLoggingInButton') : t('authLoginButton')}
                 </button>
-                 <div className="text-center">
-                    <button type="button" onClick={() => setView('forgot')} className="font-medium text-sm text-gray-300 hover:text-white">{t('authForgotPasswordLink')}</button>
-                </div>
             </form>
             <p className="text-center text-sm text-gray-300">
                 {t('authNoAccountPrompt')}{' '}
-                <button type="button" onClick={() => { setView('signupRole'); setError(''); }} className="font-medium text-saffron-400 hover:text-saffron-300">{t('authSignUpLink')}</button>
+                <button type="button" onClick={() => setView('signupRole')} className="text-saffron-400 font-bold">{t('authSignUpLink')}</button>
             </p>
         </div>
     );
-    
-    const renderSignupRole = () => {
-        const guruImgUrl = 'https://i.imgur.com/P559n2m.jpg';
-        const shishyaImgUrl = 'https://i.imgur.com/hYy1p5g.png';
 
-        return (
-            <div className="space-y-6 text-center">
-                 <div>
-                    <h1 className="text-4xl font-bold text-white">{t('authJoinTitle')}</h1>
-                    <p className="text-gray-300">{t('authChoosePath')}</p>
+    const renderSignupRole = () => (
+        <div className="space-y-6 text-center">
+            <h1 className="text-4xl font-bold text-white">{t('authJoinTitle')}</h1>
+            <div className="grid grid-cols-2 gap-4">
+                <div onClick={() => setSignupRole('guru')} className={`p-4 rounded-lg border-2 cursor-pointer transition ${signupRole === 'guru' ? 'border-saffron-500 bg-saffron-500/20' : 'border-gray-600'}`}>
+                    <h3 className="font-bold text-white">{t('authRoleGuru')}</h3>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                    <div onClick={() => setSignupRole('guru')} className={`relative rounded-lg overflow-hidden cursor-pointer transition-all duration-300 transform hover:scale-105 ${signupRole === 'guru' ? 'ring-4 ring-saffron-500 scale-105' : 'ring-2 ring-gray-600'}`}>
-                        <img src={guruImgUrl} className="w-full h-48 object-cover bg-saffron-100" alt="Guru"/>
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent"></div>
-                        <div className="absolute bottom-0 left-0 p-3 text-white text-left">
-                            <h3 className="font-bold text-lg">{t('authRoleGuru')}</h3>
-                            <p className="text-xs">{t('authRoleGuruDesc')}</p>
-                        </div>
-                    </div>
-                    <div onClick={() => setSignupRole('shishya')} className={`relative rounded-lg overflow-hidden cursor-pointer transition-all duration-300 transform hover:scale-105 ${signupRole === 'shishya' ? 'ring-4 ring-saffron-500 scale-105' : 'ring-2 ring-gray-600'}`}>
-                        <img src={shishyaImgUrl} className="w-full h-48 object-cover bg-deepBlue-100" alt="Shishya"/>
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent"></div>
-                         <div className="absolute bottom-0 left-0 p-3 text-white text-left">
-                            <h3 className="font-bold text-lg">{t('authRoleShishya')}</h3>
-                            <p className="text-xs">{t('authRoleShishyaDesc')}</p>
-                        </div>
-                    </div>
+                <div onClick={() => setSignupRole('shishya')} className={`p-4 rounded-lg border-2 cursor-pointer transition ${signupRole === 'shishya' ? 'border-saffron-500 bg-saffron-500/20' : 'border-gray-600'}`}>
+                    <h3 className="font-bold text-white">{t('authRoleShishya')}</h3>
                 </div>
-                <button onClick={() => { if(signupRole) setView('signupDetails'); else setError(t('errorSelectRole')); }} className="w-full bg-saffron-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-saffron-700 transition-colors disabled:bg-gray-500">{t('authNextButton')}</button>
-                <p className="text-center text-sm text-gray-300">
-                    {t('authHaveAccountPrompt')}{' '}
-                    <button type="button" onClick={() => { setView('login'); setError(''); }} className="font-medium text-saffron-400 hover:text-saffron-300">{t('authLoginButton')}</button>
-                </p>
             </div>
-        );
-    };
-    
+            <button onClick={() => signupRole && setView('signupDetails')} className="w-full bg-saffron-600 text-white py-3 rounded-lg font-bold">Next</button>
+        </div>
+    );
+
     const renderSignupDetails = () => (
-       <div className="space-y-4">
-            <div className="flex items-center gap-4">
-                 <button onClick={() => setView('signupRole')} className="text-gray-300 hover:text-white">
-                    <ArrowLeftIcon className="h-6 w-6" />
-                </button>
-                <h1 className="text-2xl font-bold text-white">{t('authCreateAccountTitle')}</h1>
-            </div>
-            <form onSubmit={handleSignup} className="space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                    <InputField name="firstName" placeholder={t('authFirstNamePlaceholder')} value={signupData.firstName} onChange={handleSignupChange} icon={<UserIcon className="h-5 w-5"/>} />
-                    <InputField name="lastName" placeholder={t('authLastNamePlaceholder')} value={signupData.lastName} onChange={handleSignupChange} icon={<UserIcon className="h-5 w-5"/>} />
-                </div>
-                <InputField name="email" placeholder={t('authEmailPlaceholder')} type="email" value={signupData.email} onChange={handleSignupChange} icon={<EmailIcon className="h-5 w-5"/>} />
-                <InputField name="username" placeholder={t('authUsernamePlaceholder')} value={signupData.username} onChange={handleSignupChange} icon={<UserIcon className="h-5 w-5"/>} />
-                <InputField name="mobile" placeholder={t('authMobilePlaceholder')} type="tel" value={signupData.mobile} onChange={handleSignupChange} icon={<PhoneIcon className="h-5 w-5"/>} />
-                <InputField name="password" placeholder={t('authPasswordPlaceholder')} type="password" value={signupData.password} onChange={handleSignupChange} icon={<LockIcon className="h-5 w-5"/>} />
-                <InputField name="confirmPassword" placeholder={t('authConfirmPasswordPlaceholder')} type="password" value={signupData.confirmPassword} onChange={handleSignupChange} icon={<LockIcon className="h-5 w-5"/>} />
-                
-                {error && <p className="text-red-400 bg-red-900/50 p-3 rounded-lg text-sm text-center">{error}</p>}
-                
-                <button type="submit" disabled={isLoading} className="w-full bg-saffron-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-saffron-700 transition-colors disabled:bg-saffron-800 disabled:cursor-not-allowed">
-                    {isLoading ? t('authCreatingAccountButton') : t('authCreateAccountButton')}
-                </button>
-            </form>
-       </div>
+        <form onSubmit={handleSignup} className="space-y-3">
+            <h1 className="text-2xl font-bold text-white mb-4">Account Details</h1>
+            <InputField name="firstName" placeholder="First Name" value={signupData.firstName} onChange={e => setSignupData({...signupData, firstName: e.target.value})} />
+            <InputField name="lastName" placeholder="Last Name" value={signupData.lastName} onChange={e => setSignupData({...signupData, lastName: e.target.value})} />
+            <InputField name="email" type="email" placeholder="Email" value={signupData.email} onChange={e => setSignupData({...signupData, email: e.target.value})} />
+            <InputField name="username" placeholder="Username" value={signupData.username} onChange={e => setSignupData({...signupData, username: e.target.value})} />
+            <InputField name="password" type="password" placeholder="Password" value={signupData.password} onChange={e => setSignupData({...signupData, password: e.target.value})} />
+            <InputField name="confirmPassword" type="password" placeholder="Confirm Password" value={signupData.confirmPassword} onChange={e => setSignupData({...signupData, confirmPassword: e.target.value})} />
+            {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+            <button type="submit" disabled={isLoading} className="w-full bg-saffron-600 text-white py-3 rounded-lg font-bold">
+                {isLoading ? 'Creating...' : 'Sign Up'}
+            </button>
+        </form>
     );
-
-    const renderForgotPassword = () => (
-        <div className="space-y-4">
-             <div className="flex items-center gap-4">
-                 <button onClick={() => setView('login')} className="text-gray-300 hover:text-white">
-                    <ArrowLeftIcon className="h-6 w-6" />
-                </button>
-                <h1 className="text-2xl font-bold text-white">{t('authForgotPasswordTitle')}</h1>
-            </div>
-            <form onSubmit={handleForgotPassword} className="space-y-4">
-                <p className="text-gray-300 text-center">{t('authForgotPasswordPrompt')}</p>
-                <InputField name="resetIdentifier" placeholder={t('authIdentifierPlaceholder')} value={resetIdentifier} onChange={(e) => setResetIdentifier(e.target.value)} icon={<EmailIcon className="h-5 w-5"/>} />
-                <button disabled={isLoading} className="w-full flex justify-center bg-saffron-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-saffron-700 transition-colors disabled:bg-saffron-800">
-                    {isLoading ? t('authSendingOTPButton') : t('authSendOTPButton')}
-                </button>
-            </form>
-        </div>
-    );
-
-     const renderOTP = () => (
-        <div className="space-y-4">
-            <div className="flex items-center gap-4">
-                 <button onClick={() => setView('forgot')} className="text-gray-300 hover:text-white">
-                    <ArrowLeftIcon className="h-6 w-6" />
-                </button>
-                <h1 className="text-2xl font-bold text-white">{t('authResetPasswordTitle')}</h1>
-            </div>
-            <form onSubmit={handleResetPassword} className="space-y-4">
-                <p className="text-gray-300 text-center">{t('authOTPSentPrompt', {identifier: resetIdentifier})}</p>
-                <InputField name="otp" placeholder={t('authOTPPlaceholder')} value={''} onChange={() => {}} icon={<LockIcon className="h-5 w-5"/>} />
-                <InputField name="newPassword" type="password" placeholder={t('authNewPasswordPlaceholder')} value={''} onChange={() => {}} icon={<LockIcon className="h-5 w-5"/>} />
-                <button disabled={isLoading} className="w-full flex justify-center bg-saffron-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-saffron-700 transition-colors disabled:bg-saffron-800">
-                    {isLoading ? t('authResettingPasswordButton') : t('authResetPasswordButton')}
-                </button>
-            </form>
-        </div>
-    );
-    
-    const renderContent = () => {
-        switch(view) {
-            case 'login': return renderLogin();
-            case 'signupRole': return renderSignupRole();
-            case 'signupDetails': return renderSignupDetails();
-            case 'forgot': return renderForgotPassword();
-            case 'otp': return renderOTP();
-            default: return renderLogin();
-        }
-    }
 
     return (
-        <div className="min-h-screen w-full flex items-center justify-center font-sans p-4">
-            <style>{`
-                .auth-background {
-                    background: linear-gradient(135deg, #1e3a8a, #422006, #a16207);
-                    background-size: 400% 400%;
-                    animation: gradient 15s ease infinite;
-                }
-                @keyframes gradient {
-                    0% { background-position: 0% 50%; }
-                    50% { background-position: 100% 50%; }
-                    100% { background-position: 0% 50%; }
-                }
-                .page-transition {
-                  animation: authFadeIn 0.5s ease-in-out;
-                }
-                @keyframes authFadeIn {
-                  from { opacity: 0; transform: translateY(10px); }
-                  to { opacity: 1; transform: translateY(0); }
-                }
-            `}</style>
-            <div className="w-full max-w-md p-8 space-y-8 bg-black/30 backdrop-blur-xl rounded-2xl shadow-2xl border border-gray-700 page-transition" key={view}>
-                {renderContent()}
+        <div className="min-h-screen w-full flex items-center justify-center p-4">
+            <div className="w-full max-w-md p-8 bg-black/40 backdrop-blur-md rounded-2xl border border-white/10 shadow-2xl">
+                {view === 'login' ? renderLogin() : view === 'signupRole' ? renderSignupRole() : renderSignupDetails()}
             </div>
         </div>
     );

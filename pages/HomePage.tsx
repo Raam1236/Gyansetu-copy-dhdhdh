@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { type Post, type LoggedInUser, type ActivePage, type Guru, type StoredUser } from '../types';
+import { type Post, type LoggedInUser, type ActivePage, type Guru, type StoredUser, PostType } from '../types';
 import PostCard from '../components/PostCard';
 import GuruStories from '../components/GuruStories';
 import PostCardSkeleton from '../components/PostCardSkeleton';
 import CreatePostPrompt from '../components/CreatePostPrompt';
 import { useLocalization } from '../App';
-import { APP_OWNER_USERNAME } from '../constants';
+import { supabase } from '../lib/supabase';
 
 interface HomePageProps {
   currentUser: LoggedInUser;
@@ -20,20 +20,71 @@ const HomePage: React.FC<HomePageProps> = ({ currentUser, openDakshinaModal, set
   const [gurus, setGurus] = useState<Guru[]>([]);
 
   useEffect(() => {
-    const loadData = () => {
+    const loadData = async () => {
         try {
-            const postsJson = localStorage.getItem('gyansetu-posts');
-            const sortedPosts = postsJson ? JSON.parse(postsJson).sort((a: Post, b: Post) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()) : [];
-            setPosts(sortedPosts);
+            // Fetch posts from Supabase
+            const { data: postsData, error: postsError } = await supabase
+                .from('posts')
+                .select(`
+                    *,
+                    profiles:creator_id (*)
+                `)
+                .order('created_at', { ascending: false });
 
-            const usersJson = localStorage.getItem('gyansetu-users');
-            const allUsers: StoredUser[] = usersJson ? JSON.parse(usersJson) : [];
-            setGurus(allUsers.filter(u => u.role === 'guru' && u.username !== APP_OWNER_USERNAME) as Guru[]);
+            if (postsError) throw postsError;
+
+            const mappedPosts: Post[] = postsData.map(p => ({
+                id: p.id,
+                title: p.title,
+                content: p.content,
+                type: p.type as PostType,
+                mediaUrl: p.media_url,
+                likes: p.likes_count,
+                comments: p.comments_count,
+                timestamp: p.created_at,
+                guru: {
+                    id: p.profiles.id,
+                    firstName: p.profiles.first_name,
+                    lastName: p.profiles.last_name,
+                    username: p.profiles.username,
+                    profilePictureUrl: p.profiles.avatar_url || 'https://i.pravatar.cc/150',
+                    expertise: p.profiles.expertise,
+                    bio: p.profiles.bio,
+                    rating: p.profiles.rating,
+                    reviews: p.profiles.reviews,
+                    role: 'guru',
+                    upiId: p.profiles.upi_id
+                } as Guru
+            }));
+            setPosts(mappedPosts);
+
+            // Fetch Gurus for stories
+            const { data: gurusData, error: gurusError } = await supabase
+                .from('profiles')
+                .select('*')
+                .eq('role', 'guru')
+                .limit(10);
+            
+            if (gurusError) throw gurusError;
+
+            setGurus(gurusData.map(g => ({
+                id: g.id,
+                firstName: g.first_name,
+                lastName: g.last_name,
+                username: g.username,
+                profilePictureUrl: g.avatar_url || 'https://i.pravatar.cc/150',
+                expertise: g.expertise,
+                bio: g.bio,
+                rating: g.rating,
+                reviews: g.reviews,
+                role: 'guru',
+                upiId: g.upi_id
+            } as Guru)));
+
         } catch (e) {
-            console.error("Failed to load data from storage", e);
+            console.error("Failed to load data from Supabase", e);
         } finally {
-             // Use a timeout to prevent skeleton flashing on fast loads
-            setTimeout(() => setIsLoading(false), 500);
+            setIsLoading(false);
         }
     };
     loadData();
