@@ -3,7 +3,8 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  base: '/',
+  // Use relative base path to ensure it works on subdomains (GitHub Pages) and root domains (Netlify)
+  base: './', 
   build: {
     outDir: 'dist',
     emptyOutDir: true,
@@ -14,4 +15,7 @@ export default defineConfig({
       },
     },
   },
+  server: {
+    historyApiFallback: true,
+  }
 });
